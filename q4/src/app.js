@@ -18,63 +18,155 @@ let currentProfile = null;
 -------------------------- */
 
 function loadProfile() {
-
     const text = document.getElementById("profileInput").value;
+    let profile;
 
-   
-    const profile = JSON.parse(text);
+    // 1. Safe Parsing
+    try {
+        profile = JSON.parse(text);
+    } catch (e) {
+        alert("Invalid JSON format"); // Fail safely
+        return;
+    }
 
-    currentProfile = profile;
+    // 2. Strict Type & Required Field Validation
+    if (
+        !profile ||
+        typeof profile !== "object" ||
+        Array.isArray(profile) ||
+        typeof profile.username !== "string" ||
+        !Array.isArray(profile.notifications)
+    ) {
+        alert("Invalid profile format");
+        return;
+    }
 
-    renderProfile(profile);
+    // 3. Ignore Unexpected Fields (Sanitization)
+    // We manually construct the object to ensure "extra" malicious fields are dropped.
+    const sanitizedProfile = {
+        username: profile.username,
+        notifications: []
+    };
+
+    // 4. Validate individual array elements
+    for (let item of profile.notifications) {
+        if (typeof item !== "string") {
+            alert("Invalid profile format");
+            return;
+        }
+        sanitizedProfile.notifications.push(item);
+    }
+
+    // Assign the cleaned object, not the raw input
+    currentProfile = sanitizedProfile;
+    renderProfile(sanitizedProfile);
 }
 
-
 /* -------------------------
-   Render Profile
+   Render Profile 
 -------------------------- */
 
 function renderProfile(profile) {
-
-    
-    document.getElementById("username").innerHTML = profile.username;
-
+    // 1. Clear existing content
+    // Clearing with "" is safe, as no untrusted data is being parsed here.
     const list = document.getElementById("notifications");
-    list.innerHTML = "";
+    list.innerHTML = ""; 
 
-    for (let n of profile.notifications) {
+    // 2. Securely render the Username
+    // FIX: Replaced .innerHTML with .textContent
+    // This prevents XSS by treating the username as plain text.
+    const usernameElement = document.getElementById("username");
+    if (profile && profile.username) {
+        usernameElement.textContent = profile.username;
+    }
 
-        const li = document.createElement("li");
-
-        
-        li.innerHTML = n;
-
-        list.appendChild(li);
+    // 3. Securely render Notifications
+    // FIX: Replaced .innerHTML with .textContent inside the loop
+    if (profile && Array.isArray(profile.notifications)) {
+        profile.notifications.forEach(notification => {
+            const li = document.createElement("li");
+            
+            // This ensures characters like < and > are displayed literally
+            // and NOT parsed as HTML tags.
+            li.textContent = notification;
+            
+            list.appendChild(li);
+        });
     }
 }
-
 
 /* -------------------------
    Browser Storage
 -------------------------- */
 
 function saveSession() {
-    localStorage.setItem("profile", JSON.stringify(currentProfile));
+    // Check if there is actually data to save
+    if (!currentProfile) {
+        alert("No active session to save.");
+        return;
+    }
 
-    alert("Session saved");
+    try {
+        // We only save the necessary, validated fields.
+        // This avoids storing "extra" sensitive data if the object was polluted.
+        const sessionData = {
+            username: currentProfile.username,
+            notifications: currentProfile.notifications
+        };
+
+        localStorage.setItem("profile", JSON.stringify(sessionData));
+        alert("Session saved");
+    } catch (e) {
+        console.error("Failed to save to localStorage", e);
+    }
 }
 
 
 function loadSession() {
-
     const stored = localStorage.getItem("profile");
 
-    if (stored) {
+    // 1. Check if storage is empty
+    if (!stored) {
+        return; 
+    }
 
+    try {
+        // 2. Safe Parsing: Handle corrupted JSON strings in storage
         const profile = JSON.parse(stored);
 
-        currentProfile = profile;
+        // 3. Re-Validate: Never trust data from storage without checking types
+        if (
+            !profile ||
+            typeof profile !== "object" ||
+            Array.isArray(profile) ||
+            typeof profile.username !== "string" ||
+            !Array.isArray(profile.notifications)
+        ) {
+            throw new Error("Stored session data is malformed or invalid.");
+        }
 
-        renderProfile(profile);
+        // 4. Sanitize: Re-construct the object to ignore unexpected fields
+        const validatedProfile = {
+            username: profile.username,
+            notifications: profile.notifications.filter(n => typeof n === 'string')
+        };
+
+        for (let n of profile.notifications) {
+            if (typeof n !== "string") {
+                throw new Error("Stored session data is malformed or invalid.");
+            }
+            validatedProfile.notifications.push(n);
+        }
+
+        currentProfile = validatedProfile;
+        renderProfile(validatedProfile);
+
+    } catch (e) {
+        // 5. Fail Safely: If storage is manipulated/corrupted, clear it and reset
+        console.error("Session restoration failed:", e.message);
+        localStorage.removeItem("profile"); 
+        currentProfile = null;
+        alert("Session corrupted and has been reset.");
     }
 }
+
