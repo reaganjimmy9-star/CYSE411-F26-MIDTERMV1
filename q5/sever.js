@@ -1,171 +1,88 @@
-// CYSE 411 Exam Application
-// WARNING: This code contains security vulnerabilities.
-// Students must repair the implementation.
+//q5b with explanation
+const express = require("express")
+const sqlite3 = require("sqlite3").verbose()
+const bodyParser = require("body-parser")
 
-const loadBtn = document.getElementById("loadBtn");
-const saveBtn = document.getElementById("saveSession");
-const loadSessionBtn = document.getElementById("loadSession");
+const app = express()
+const db = new sqlite3.Database("portal.db")
 
-loadBtn.addEventListener("click", loadProfile);
-saveBtn.addEventListener("click", saveSession);
-loadSessionBtn.addEventListener("click", loadSession);
+// Middleware to parse incoming request bodies
+// This allows the server to read username/password from form data or JSON
+app.use(bodyParser.urlencoded({ extended: true }))
+app.use(bodyParser.json())
 
-let currentProfile = null;
+db.serialize(() => {
 
+    // Create the users table if it does not already exist
+    db.run(`
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            password TEXT
+        )
+    `)
 
-/* -------------------------
-   Load Profile
--------------------------- */
+    // Check whether the table is empty
+    db.get("SELECT COUNT(*) AS count FROM users", (err, row) => {
 
-function loadProfile() {
-    const text = document.getElementById("profileInput").value;
-    let profile;
+        if (row.count === 0) {
 
-    // 1. Safe Parsing
-    try {
-        profile = JSON.parse(text);
-    } catch (e) {
-        alert("Invalid JSON format"); // Fail safely
-        return;
-    }
+            // Insert default users using parameterized queries
+            // These are already safe because they use ? placeholders
+            db.run(
+                "INSERT INTO users (username, password) VALUES (?, ?)",
+                ["admin", "admin123"]
+            )
 
-    // 2. Strict Type & Required Field Validation
-    if (
-        !profile ||
-        typeof profile !== "object" ||
-        Array.isArray(profile) ||
-        typeof profile.username !== "string" ||
-        !Array.isArray(profile.notifications)
-    ) {
-        alert("Invalid profile format");
-        return;
-    }
-
-    // 3. Ignore Unexpected Fields (Sanitization)
-    // We manually construct the object to ensure "extra" malicious fields are dropped.
-    const sanitizedProfile = {
-        username: profile.username,
-        notifications: []
-    };
-
-    // 4. Validate individual array elements
-    for (let item of profile.notifications) {
-        if (typeof item !== "string") {
-            alert("Invalid profile format");
-            return;
-        }
-        sanitizedProfile.notifications.push(item);
-    }
-
-    // Assign the cleaned object, not the raw input
-    currentProfile = sanitizedProfile;
-    renderProfile(sanitizedProfile);
-}
-
-/* -------------------------
-   Render Profile 
--------------------------- */
-
-function renderProfile(profile) {
-    // 1. Clear existing content
-    // Clearing with "" is safe, as no untrusted data is being parsed here.
-    const list = document.getElementById("notifications");
-    list.innerHTML = ""; 
-
-    // 2. Securely render the Username
-    // FIX: Replaced .innerHTML with .textContent
-    // This prevents XSS by treating the username as plain text.
-    const usernameElement = document.getElementById("username");
-    if (profile && profile.username) {
-        usernameElement.textContent = profile.username;
-    }
-
-    // 3. Securely render Notifications
-    // FIX: Replaced .innerHTML with .textContent inside the loop
-    if (profile && Array.isArray(profile.notifications)) {
-        profile.notifications.forEach(notification => {
-            const li = document.createElement("li");
-            
-            // This ensures characters like < and > are displayed literally
-            // and NOT parsed as HTML tags.
-            li.textContent = notification;
-            
-            list.appendChild(li);
-        });
-    }
-}
-
-/* -------------------------
-   Browser Storage
--------------------------- */
-
-function saveSession() {
-    // Check if there is actually data to save
-    if (!currentProfile) {
-        alert("No active session to save.");
-        return;
-    }
-
-    try {
-        // We only save the necessary, validated fields.
-        // This avoids storing "extra" sensitive data if the object was polluted.
-        const sessionData = {
-            username: currentProfile.username,
-            notifications: currentProfile.notifications
-        };
-
-        localStorage.setItem("profile", JSON.stringify(sessionData));
-        alert("Session saved");
-    } catch (e) {
-        console.error("Failed to save to localStorage", e);
-    }
-}
-
-
-function loadSession() {
-    const stored = localStorage.getItem("profile");
-
-    // 1. Check if storage is empty
-    if (!stored) {
-        return; 
-    }
-
-    try {
-        // 2. Safe Parsing: Handle corrupted JSON strings in storage
-        const profile = JSON.parse(stored);
-
-        // 3. Re-Validate: Never trust data from storage without checking types
-        if (
-            !profile ||
-            typeof profile !== "object" ||
-            Array.isArray(profile) ||
-            typeof profile.username !== "string" ||
-            !Array.isArray(profile.notifications)
-        ) {
-            throw new Error("Stored session data is malformed or invalid.");
+            db.run(
+                "INSERT INTO users (username, password) VALUES (?, ?)",
+                ["employee", "password"]
+            )
         }
 
-        // 4. Sanitize: Re-construct the object to ignore unexpected fields
-        const validatedProfile = {
-            username: profile.username,
-            notifications: profile.notifications.filter(n => typeof n === 'string')
-        };
+    })
 
-        for (let n of profile.notifications) {
-            if (typeof n !== "string") {
-                throw new Error("Stored session data is malformed or invalid.");
-            }
-            validatedProfile.notifications.push(n);
+})
+
+
+app.post("/login", (req, res) => {
+
+    // Read the submitted username and password from the request body
+    const username = req.body.username;
+    const password = req.body.password;
+
+    // SECURITY FIX:
+    // Instead of building SQL with string concatenation,
+    // use a parameterized query with placeholders.
+    //
+    // This keeps the SQL structure fixed and sends user input separately,
+    // so the database treats username/password as plain data, not SQL code.
+    const query = "SELECT * FROM users WHERE username = ? AND password = ?";
+
+    console.log("\nExecuting secure parameterized query");
+
+    // Pass the actual user input as bound parameters
+    // This prevents SQL injection because even malicious input like
+    // "' OR '1'='1' --" is treated as a literal string value
+    db.get(query, [username, password], (err, row) => {
+
+        if (err) {
+            // If the database throws an error, return a server error response
+            console.error(err);
+            return res.status(500).send("Database error");
         }
 
-        currentProfile = validatedProfile;
-        renderProfile(validatedProfile);
+        // If a matching row is found, the login succeeds
+        if (row) {
+            res.send("Login success");
+        } else {
+            // Otherwise, no matching user was found
+            res.send("Login failed");
+        }
+    });
+});
 
-    } catch (e) {
-        // 5. Fail Safely: If storage is manipulated/corrupted, clear it and reset
-        console.error("Session restoration failed:", e.message);
-        localStorage.removeItem("profile"); 
-        currentProfile = null;
-        alert("Session corrupted and has been reset.");
-    }
-}
+
+app.listen(3000, () => {
+    console.log("Server running on http://localhost:3000")
+})
